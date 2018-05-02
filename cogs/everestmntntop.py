@@ -11,19 +11,36 @@ from .utils.dataIO import dataIO
 
 
 class Everestmntntop:
+    default_cooldown = 5
+    config_files = {
+        "channels": "data/everestmntntop/channels.json",
+        "comments": "data/everestmntntop/comments.json",
+        "cooldown": "data/everestmntntop/cooldown.json"
+    }
 
     def __init__(self, bot):
         self.bot = bot
-        self.file_path = "data/everestmntntop/comments.json"
-        self.channels_path = "data/everestmntntop/channels.json"
-        self.comments = dataIO.load_json(self.file_path)
-        self.channels = dataIO.load_json(self.channels_path)
+
+        self.comments = dataIO.load_json(self.config_files["comments"])
+        self.channels = dataIO.load_json(self.config_files["channels"])
+        self.cooldown_timer = dataIO.load_json(self.config_files["cooldown"])
+
         self.cooldown = False
-        # self.cooldown_timer = dataIO.load_json(self.cooldown_path) 
-        self.cooldown_timer = 29
 
     def _check_channel(self, channel):
         return channel in self.channels
+
+    @commands.command()
+    @checks.admin_or_permissions(administrator=True)
+    async def setqcooldown(self, cooldown):
+        try:
+            self.cooldown_timer = int(cooldown)
+        except:
+            await self.bot.say("NaN")
+            return
+
+        dataIO.save_json(self.config_files["cooldown"], self.cooldown_timer)
+        await self.bot.say("Ok")
 
     @commands.command(pass_context=True, no_pm=True)
     @checks.mod_or_permissions(administrator=True)
@@ -33,7 +50,7 @@ class Everestmntntop:
             self.comments[user] = []
         if text not in self.comments[user]:
             self.comments[user].append(text)
-            dataIO.save_json(self.file_path, self.comments)
+            dataIO.save_json(self.config_files["comments"], self.comments)
             await self.bot.say("Neuen Kommentar zu user %s hinzugefügt." % user)
         else:
             await self.bot.say("Kommentar existiert bereits!")
@@ -47,7 +64,7 @@ class Everestmntntop:
         channel_id = channel.id
         if channel_id not in self.channels:
             self.channels.append(channel_id)
-            dataIO.save_json(self.channels_path, self.channels)
+            dataIO.save_json(self.config_files["channels"], self.channels)
 
     @commands.command(pass_context=True, no_pm=True)
     async def listquotes(self, ctx, name=None):
@@ -77,20 +94,20 @@ class Everestmntntop:
                     clist = clist[-1:]
             await self.bot.whisper("```%s```" % cout)
 
-    async def checkCC(self, message):
+    async def handle_quote_command(self, message):
         if message.author.id == self.bot.user.id or len(message.content) < 2 or message.channel.is_private:
             return
 
-        if not self._check_channel(message.channel.id):
-            return
+        # Channel whitelisting disabled
+        # if not self._check_channel(message.channel.id):
+        #     return
 
         if not user_allowed(message):
             return
 
-        msg = message.content
         prefix = self.get_prefix(message)
-        if prefix == "$":
-            cmd = msg[len(prefix):]
+        if prefix:
+            cmd = message.content[len(prefix):]
             if cmd.lower() in self.comments and not self.cooldown:
                 self.cooldown = True
                 Timer(self.cooldown_timer, self.setCooldownFalse, [], {}).start()
@@ -104,7 +121,7 @@ class Everestmntntop:
         for p in self.bot.settings.get_prefixes(message.server):
             if message.content.startswith(p):
                 return p
-        return False
+        return None
 
 
 def check_folders():
@@ -113,19 +130,18 @@ def check_folders():
 
 
 def check_files():
-    f = "data/everestmntntop/comments.json"
-    if not dataIO.is_valid_json(f):
-        dataIO.save_json(f, {})
-    g = "data/everestmntntop/channels.json"
-    if not dataIO.is_valid_json(g):
-        dataIO.save_json(g, [])
-    h = "data/everestmntntop/cooldown.json"
+    configs = Everestmntntop.config_files
+    if not os.path.exists(configs["comments"]):
+        dataIO.save_json(configs["comments"], [])
+    if not os.path.exists(configs["channels"]):
+        dataIO.save_json(configs["channels"], [])
+    if not os.path.exists(configs["cooldown"]):
+        dataIO.save_json(configs["cooldown"], Everestmntntop.default_cooldown)
 
 
 def setup(bot):
     check_folders()
-    # check_files()
-    # check_files LÖSCHT alle Daten, falls ein Fehler vorliegt! NICHT BENUTZEN!
+    check_files()
     n = Everestmntntop(bot)
-    bot.add_listener(n.checkCC, "on_message")
+    bot.add_listener(n.handle_quote_command, "on_message")
     bot.add_cog(n)
