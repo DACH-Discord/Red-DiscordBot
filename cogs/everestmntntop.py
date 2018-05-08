@@ -32,7 +32,7 @@ class Everestmntntop:
 
     @commands.command()
     @checks.admin_or_permissions(administrator=True)
-    async def setqcooldown(self, cooldown):
+    async def setQuoteCooldown(self, cooldown):
         try:
             self.cooldown_timer = int(cooldown)
         except:
@@ -57,7 +57,7 @@ class Everestmntntop:
 
     @commands.command(pass_context=True, no_pm=True)
     @checks.mod_or_permissions(administrator=True)
-    async def wlQuoteChannel(self, ctx, channel=None):
+    async def whitelistQuoteChannel(self, ctx, channel=None):
         if channel is None:
             channel = ctx.message.channel
 
@@ -69,7 +69,6 @@ class Everestmntntop:
     @commands.command(pass_context=True, no_pm=True)
     async def listquotes(self, ctx, name=None):
         if name is None:
-            channel_id = ctx.message.channel.id
             counts = []
             for name in self.comments:
                 counts.append("%s - %s" % (name, len(self.comments[name])))
@@ -98,9 +97,8 @@ class Everestmntntop:
         if message.author.id == self.bot.user.id or len(message.content) < 2 or message.channel.is_private:
             return
 
-        # Channel whitelisting disabled
-        # if not self._check_channel(message.channel.id):
-        #     return
+        if not self._check_channel(message.channel.id):
+            return
 
         if not user_allowed(message):
             return
