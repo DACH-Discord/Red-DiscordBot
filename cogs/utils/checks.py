@@ -14,7 +14,7 @@ def is_owner_check(ctx):
     return _id == settings.owner or _id in ctx.bot.settings.co_owners
 
 def is_owner():
-    return commands.check(is_owner_check)
+    return commands.check(admin_or_permissions())
 
 # The permission system of the bot is based on a "just works" basis
 # You have permissions and the bot has permissions. If you meet the permissions
