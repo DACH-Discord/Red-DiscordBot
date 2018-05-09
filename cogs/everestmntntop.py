@@ -57,14 +57,20 @@ class Everestmntntop:
 
     @commands.command(pass_context=True, no_pm=True)
     @checks.mod_or_permissions(administrator=True)
-    async def whitelistQuoteChannel(self, ctx, channel=None):
+    async def wlquotechannel(self, ctx, channel=None):
         if channel is None:
             channel = ctx.message.channel
 
         channel_id = channel.id
         if channel_id not in self.channels:
             self.channels.append(channel_id)
-            dataIO.save_json(self.config_files["channels"], self.channels)
+            resp = self.bot.say("Whitelisted channel")
+        else:
+            self.channels.remove(channel_id)
+            resp = self.bot.say("Blacklisted channel")
+
+        dataIO.save_json(self.config_files["channels"], self.channels)
+        await resp
 
     @commands.command(pass_context=True, no_pm=True)
     async def listquotes(self, ctx, name=None):
