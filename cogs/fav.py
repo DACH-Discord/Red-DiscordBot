@@ -27,8 +27,8 @@ class GreenBook:
                             (user.id, reaction.message.id, reaction.message.channel.id))
 
             # Get the id of this fav
-            cur = self.db.cursor()
-            cur.execute("SELECT fav_id FROM favs WHERE user_id=? AND msg_id=?", (user.id, reaction.message.id))
+            cur = self.db.execute("SELECT fav_id FROM favs WHERE user_id=? AND msg_id=?",
+                                  (user.id, reaction.message.id))
             favid = cur.fetchone()[0]
             cur.close()
 
@@ -46,8 +46,7 @@ class GreenBook:
                 await self.bot.delete_message(tagquestion)
 
     async def embed_fav(self, favid, requester_name) -> Embed:
-        cur = self.db.cursor()
-        cur.execute("SELECT msg_id, channel_id, user_id FROM favs WHERE fav_id=?", (favid,))
+        cur = self.db.execute("SELECT msg_id, channel_id, user_id FROM favs WHERE fav_id=?", (favid,))
         msg_id, channel_id, user_id = cur.fetchone()
         cur.close()
 
@@ -62,8 +61,11 @@ class GreenBook:
         embed = Embed()
         embed.description = msg.clean_content
         embed.set_author(name=msg.author.display_name, icon_url=msg.author.avatar_url)
-        embed.set_footer(text="%s - #%s - %s" %
-                              (requester_name, msg.channel.name, msg.timestamp.strftime("%d.%m.%Y %H:%M")))
+        # TODO Fix time
+        embed.set_footer(text="#%s - %s | Fav by %s" %
+                              (msg.channel.name,
+                               msg.timestamp.strftime("%d.%m.%Y %H:%M"),
+                               requester_name))
         if isinstance(msg.author, Member):
             embed.colour = msg.author.colour
 
@@ -96,21 +98,22 @@ class GreenBook:
     async def handle_fav_controls(self, favmsg, favid, owner: User, show_controls=False):
         if show_controls:
             await self.bot.add_reaction(favmsg, "\N{WASTEBASKET}")
+            await self.bot.add_reaction(favmsg, "\N{LABEL}")
 
-        wait_for_reaction = True
-        while wait_for_reaction:
-            wait_for_reaction = False
-            reaction, user = await self.bot.wait_for_reaction(message=favmsg, user=owner, timeout=30 * 60)
+        result = await self.bot.wait_for_reaction(message=favmsg, user=owner, timeout=30 * 60,
+                                                  emoji=["\N{WASTEBASKET}", "\N{LABEL}"])
 
-            # User did not react
-            if not reaction:
-                return
+        if not result:
+            return
 
-            if reaction.emoji == "\N{WASTEBASKET}":
-                self.delete_fav(favid)
-                await self.bot.delete_message(favmsg)
-            else:
-                wait_for_reaction = True
+        reaction, user = result
+
+        if reaction.emoji == "\N{WASTEBASKET}":
+            self.delete_fav(favid)
+            await self.bot.delete_message(favmsg)
+        elif reaction.emoji == "\N{LABEL}":
+            # TODO actually relabel
+            await self.bot.send_message(favmsg.channel, "relabel")
 
     def delete_fav(self, favid):
         self.db.execute("delete from favs where fav_id=?", (favid,))
@@ -123,8 +126,8 @@ class GreenBook:
         return result
 
     def untagged_count(self, user_id):
-        cur = self.db.execute("select count(*) from favs natural left join tags where user_id=? and tagname is null",
-                              (user_id,))
+        cur = self.db.execute("select count(*) from favs natural left join tags "
+                              "where user_id=? and tagname is null", (user_id,))
         result = cur.fetchone()[0]
         cur.close()
         return result
@@ -132,23 +135,19 @@ class GreenBook:
     @commands.command(pass_context=True, hidden=True)
     async def addfav(self, ctx, msg_id, hints=None):
         """Add a fav by message id. Also react with \N{GREEN BOOK} to add a fav."""
+        # TODO Implement addfav
         raise NotImplementedError()
 
     @commands.command(pass_context=True)
-    async def fav(self, ctx, hint=None):
+    async def fav(self, ctx, hint=""):
         """Quote a random from your favorite messages."""
         author = ctx.message.author
         user_id = author.id
-        cur = self.db.cursor()
 
-        if hint:
-            cur.execute("SELECT fav_id FROM favs NATURAL JOIN tags WHERE user_id=? AND tagname=?",
-                        (user_id, hint))
-        else:
-            cur.execute("SELECT fav_id FROM favs WHERE user_id=?", (user_id,))
-        favs = cur.fetchall()
-
-        cur.close()
+        cur = self.db.execute("select fav_id from favs natural left join tags "
+                              "where user_id=:uid and (tagname=:tag or :tag='')",
+                              {"uid": user_id, "tag": hint})
+        favs = [x[0] for x in cur.fetchall()]
 
         if not favs:
             if hint:
@@ -157,11 +156,10 @@ class GreenBook:
                 await self.bot.say("You have no favs.")
             return
 
-        favid = random.choice(favs)[0]
+        favid = random.choice(favs)
         await self.post_fav(favid, author)
 
-        if not ctx.message.channel.is_private:
-            await self.bot.delete_message(ctx.message)
+        not ctx.message.channel.is_private and await self.bot.delete_message(ctx.message)
 
     @commands.command(pass_context=True)
     async def myfavs(self, ctx, hint=None):
@@ -192,9 +190,9 @@ class GreenBook:
             # Print the favs from the given tag
             cur.execute("select fav_id from favs natural join tags where user_id=? and tagname=?",
                         (user_id, hint))
-            favs = cur.fetchall()
+            favs = [x[0] for x in cur.fetchall()]
 
-            for favid, in favs:
+            for favid in favs:
                 await self.post_fav(favid, author)
         cur.close()
 
