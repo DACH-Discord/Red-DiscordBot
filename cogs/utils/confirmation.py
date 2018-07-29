@@ -1,3 +1,4 @@
+import asyncio
 from functools import wraps
 
 from discord.ext.commands import Context
@@ -50,7 +51,7 @@ def delete_confirm(func):
 
         # Cannot delete messages in private channels
         if not ctx.message.channel.is_private:
-            await ctx.bot.delete_message(ctx.message)
+            asyncio.ensure_future(ctx.bot.delete_message(ctx.message))
 
         await func(*args, **kwargs)
 
