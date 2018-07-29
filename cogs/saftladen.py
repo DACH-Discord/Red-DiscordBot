@@ -2,6 +2,7 @@ from discord import Channel, Role
 from discord.ext import commands
 from discord.utils import find
 
+from cogs.utils.confirmation import reaction_confirm
 from cogs.utils import checks
 
 
@@ -47,12 +48,14 @@ class Saftladen:
                 else:
                     await self.bot.delete_channel_permissions(channel, role)
 
+            del self.old_perms[channel]
             return True
         else:
             return False
 
     @commands.command(pass_context=True, no_pm=True)
     @checks.mod()
+    @reaction_confirm
     async def lockdown(self, ctx, channel: Channel = None):
         if not channel:
             channel = ctx.message.channel
@@ -66,18 +69,16 @@ class Saftladen:
             role = find(lambda r: r.name == role_name, server.roles)
             await self.overwrite(channel, role, **self.exception_overwrites)
 
-        await self.bot.say("Lockdown engaged")
+        return True
 
     @commands.command(pass_context=True, no_pm=True)
     @checks.mod()
+    @reaction_confirm
     async def unlock(self, ctx, channel: Channel = None):
         if not channel:
             channel = ctx.message.channel
 
-        if await self.restore(channel):
-            await self.bot.say("All clear")
-        else:
-            await self.bot.say("Channel is not locked")
+        return await self.restore(channel)
 
     @commands.command(pass_context=True, no_pm=True, hidden=True)
     @checks.mod()
