@@ -4,7 +4,7 @@ import random
 from functools import partial
 from unicodedata import name
 
-from discord import User, Reaction, Embed, Member, NotFound, Message, Channel, Client, ChannelType, Server
+from discord import User, Reaction, Embed, Member, NotFound, Message, Channel, Client, ChannelType, Server, Colour
 from discord.ext import commands
 from discord.utils import get
 from peewee import fn, JOIN
@@ -34,7 +34,7 @@ class GreenBook:
     @commands.command(pass_context=True)
     @delete_confirm
     async def fav(self, ctx, hint=""):
-        """Quote a random from your favorite messages. Add one by reacting with \N{GREEN BOOK}."""
+        """Quote a random one of your favorite messages. Add one by reacting with \N{GREEN BOOK}."""
         author = ctx.message.author
 
         server = None
@@ -136,6 +136,10 @@ class GreenBook:
                                favowner.display_name))
         if isinstance(msg.author, Member):
             embed.colour = msg.author.colour
+
+            # Prevent default black colour
+            if embed.colour == Colour.default():
+                embed.colour = Colour(0xffffff)
 
         # Handle image embeds from source message
         for attachment in msg.attachments:
