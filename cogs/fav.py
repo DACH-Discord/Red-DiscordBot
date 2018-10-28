@@ -1,71 +1,139 @@
 import asyncio
 import os
 import random
-import sqlite3
-from sqlite3 import Connection
+from functools import partial
+from unicodedata import name
 
-from discord import User, Reaction, Embed, Member, NotFound
+from discord import User, Reaction, Embed, Member, NotFound, Message, Channel, Client, ChannelType, Server
 from discord.ext import commands
+from discord.utils import get
+from peewee import fn, JOIN
 
-
-class ChannelNotFoundError(Exception):
-    pass
+from cogs.favutil import entity, delete_message_by_id
+from cogs.favutil.entity import Fav, Tag, LogEntry
+from cogs.favutil.exception import ChannelNotFoundError
+from cogs.favutil.reactions import create_reaction_menu
+from cogs.utils import checks
+from cogs.utils.confirmation import reaction_confirm, delete_confirm
 
 
 class GreenBook:
 
-    def __init__(self, bot, conn: Connection):
-        self.bot = bot
-        self.db = conn
+    def __init__(self, bot):
+        self.bot = bot  # type: Client
+
+        self.disabled_channels = []
+        self.disabled_users = []
 
         self.bot.add_listener(self.on_addfav_reaction, "on_reaction_add")
 
     async def on_addfav_reaction(self, reaction: Reaction, user: User):
         if reaction.emoji == "\N{GREEN BOOK}":
-            # Save the fav and later offer to add tags to it
-            self.db.execute("INSERT INTO favs (user_id, msg_id, channel_id) VALUES (?, ?, ?)",
-                            (user.id, reaction.message.id, reaction.message.channel.id))
+            await self.add_fav_action(reaction.message, user)
 
-            # Get the id of this fav
-            cur = self.db.execute("SELECT fav_id FROM favs WHERE user_id=? AND msg_id=?",
-                                  (user.id, reaction.message.id))
-            favid = cur.fetchone()[0]
-            cur.close()
+    @commands.command(pass_context=True)
+    @delete_confirm
+    async def fav(self, ctx, hint=""):
+        """Quote a random from your favorite messages. Add one by reacting with \N{GREEN BOOK}."""
+        author = ctx.message.author
 
-            favembed = await self.embed_fav(favid, user.display_name)
-            tagquestion = await self.bot.send_message(content="Add tags to fav (space-separated)?",
-                                                      destination=user,
-                                                      embed=favembed)
-            tagmsg = await self.bot.wait_for_message(timeout=30, author=user, channel=tagquestion.channel)
+        server = None
+        channel = ctx.message.channel
+        if not channel.is_private:
+            server = channel.server
 
-            if tagmsg:
-                tags = [(favid, tag) for tag in tagmsg.content.split(" ")]
-                self.db.executemany("INSERT INTO tags (fav_id, tagname) VALUES (?, ?)", tags)
-                await self.bot.add_reaction(tagmsg, "\N{WHITE HEAVY CHECK MARK}")
+        if server:
+            favs = Fav.get_by_user_and_server(author.id, server.id, hint)
+        else:
+            favs = Fav.get_by_user(author.id, hint)
+
+        if not favs:
+            if hint:
+                await self.bot.say("You have no favs tagged with '%s'" % hint)
             else:
-                await self.bot.delete_message(tagquestion)
+                await self.bot.say("You have no favs.")
+            return
 
-    async def embed_fav(self, favid, requester_name) -> Embed:
-        cur = self.db.execute("SELECT msg_id, channel_id, user_id FROM favs WHERE fav_id=?", (favid,))
-        msg_id, channel_id, user_id = cur.fetchone()
-        cur.close()
+        favid = random.choice(favs)
+        await self.post_fav_by_id_action(favid, ctx.message.channel)
 
-        # Get the channel the fav message was posted in
-        channel = self.bot.get_channel(channel_id)
+    @commands.command(pass_context=True)
+    @delete_confirm
+    async def myfavs(self, ctx, hint=None):
+        """Get a list of your tags, or quote all favs with a specific tag."""
+        await self.myfavs_action(ctx.message.author, hint)
+
+    @commands.command(pass_context=True)
+    @delete_confirm
+    async def untagged(self, ctx):
+        """See all your favs that have no tags."""
+        await self.untagged_action(ctx.message.author)
+
+    @commands.command(pass_context=True)
+    @reaction_confirm
+    async def addfav(self, ctx, msg_id):
+        """Add a fav by message id."""
+        await self.add_fav_by_id_action(msg_id, ctx.message.server, ctx.message.author)
+
+    @commands.command(hidden=True)
+    async def pyname(self, msg: str):
+        if len(msg) > 1:
+            return False
+        await self.bot.say(name(msg[0]))
+
+    @commands.group(pass_context=True, hidden=True)
+    @checks.is_owner()
+    async def favadm(self, ctx):
+        """Administrative actions"""
+        if ctx.invoked_subcommand is None:
+            await self.bot.send_cmd_help(ctx)
+
+    @favadm.command(pass_context=True)
+    @reaction_confirm
+    async def disable_channel(self, ctx, channel: Channel):
+        """Disable all messages in a channel from being faved."""
+        disabled = await self.disable_channel_action(channel)
+
+        if disabled:
+            await self.bot.add_reaction(ctx.message, "\N{LOCK}")
+        else:
+            await self.bot.add_reaction(ctx.message, "\N{OPEN LOCK}")
+        return True
+
+    @favadm.command(pass_context=True)
+    @reaction_confirm
+    async def disable_user(self, ctx, user: User):
+        """Disable all messages of a user from being faved."""
+        disabled = await self.disable_user_action(user)
+
+        if disabled:
+            await self.bot.add_reaction(ctx.message, "\N{LOCK}")
+        else:
+            await self.bot.add_reaction(ctx.message, "\N{OPEN LOCK}")
+        return True
+
+    @favadm.command(pass_context=True)
+    @reaction_confirm
+    async def purge(self, ctx, msg_id: str):
+        """Permanently remove a fav and all associated messages"""
+        return await self.purge_action(msg_id)
+
+    async def embed_fav(self, fav: Fav) -> Embed:
+        channel = self.bot.get_channel(fav.channel_id)
         if not channel:
             raise ChannelNotFoundError()
 
-        # Retrieve the message, this may raise a variety of exceptions, handle in calling method
-        msg = await self.bot.get_message(channel, msg_id)
+        favowner = get(channel.server.members, id=fav.user_id)
+        msg = await self.bot.get_message(channel, fav.msg_id)
 
         embed = Embed()
         embed.description = msg.clean_content
         embed.set_author(name=msg.author.display_name, icon_url=msg.author.avatar_url)
-        # TODO Fix time
+        # TODO Fix timezone
         embed.set_footer(text="#%s - %s | Fav by %s" %
                               (msg.channel.name,
                                msg.timestamp.strftime("%d.%m.%Y %H:%M"),
-                               requester_name))
+                               favowner.display_name))
         if isinstance(msg.author, Member):
             embed.colour = msg.author.colour
 
@@ -77,164 +145,200 @@ class GreenBook:
 
         return embed
 
-    async def post_fav(self, favid, requester: User):
+    async def post_fav_by_id_action(self, favid, channel: Channel):
         try:
-            embed = await self.embed_fav(favid, requester.display_name)
-            favmsg = await self.bot.say(embed=embed)
+            fav = Fav.get_by_id(favid)
+            embed = await self.embed_fav(fav)
+            favmsg = await self.bot.send_message(channel, embed=embed)
+
+            # Write log
+            LogEntry.create(favmsg.id,
+                            favmsg.channel.id,
+                            favmsg.server.id if favmsg.server else None,
+                            fav.fav_id)
+
+            # Create reaction menu
+            should_show_controls = favmsg.channel.is_private
+            opts = {"\N{WASTEBASKET}": partial(self.delete_fav_action, favid, favmsg),
+                    "\N{LABEL}": partial(self.retag_fav_action, favid)}
 
             # Wait for control reactions without blocking
-            should_show_controls = favmsg.channel.is_private
-            fut = self.handle_fav_controls(favmsg, favid, requester, show_controls=should_show_controls)
-            asyncio.ensure_future(fut)
+            asyncio.ensure_future(
+                create_reaction_menu(self.bot, favmsg, opts, show_options=should_show_controls))
 
         except ChannelNotFoundError:
-            await self.bot.say("Could not find source channel, deleting from db.")
-            self.delete_fav(favid)
+            await self.bot.send_message(channel, "Could not find source channel, deleting from db.")
+            Fav.delete_by_id(favid)
 
         except NotFound:
-            await self.bot.say("Could not find source message, deleting from db.")
-            self.delete_fav(favid)
+            await self.bot.send_message(channel, "Could not find source message, deleting from db.")
+            Fav.delete_by_id(favid)
 
-    async def handle_fav_controls(self, favmsg, favid, owner: User, show_controls=False):
-        if show_controls:
-            await self.bot.add_reaction(favmsg, "\N{WASTEBASKET}")
-            await self.bot.add_reaction(favmsg, "\N{LABEL}")
-
-        result = await self.bot.wait_for_reaction(message=favmsg, user=owner, timeout=30 * 60,
-                                                  emoji=["\N{WASTEBASKET}", "\N{LABEL}"])
-
-        if not result:
+    async def add_fav_action(self, msg: Message, user: User):
+        # Ignore private messages
+        if msg.channel.is_private:
             return
 
-        reaction, user = result
-
-        if reaction.emoji == "\N{WASTEBASKET}":
-            self.delete_fav(favid)
-            await self.bot.delete_message(favmsg)
-        elif reaction.emoji == "\N{LABEL}":
-            # TODO actually relabel
-            await self.bot.send_message(favmsg.channel, "relabel")
-
-    def delete_fav(self, favid):
-        self.db.execute("delete from favs where fav_id=?", (favid,))
-        self.db.execute("delete from tags where fav_id=?", (favid,))
-
-    def favcount(self, user_id):
-        cur = self.db.execute("select count(*) from favs where user_id=?", (user_id,))
-        result = cur.fetchone()[0]
-        cur.close()
-        return result
-
-    def untagged_count(self, user_id):
-        cur = self.db.execute("select count(*) from favs natural left join tags "
-                              "where user_id=? and tagname is null", (user_id,))
-        result = cur.fetchone()[0]
-        cur.close()
-        return result
-
-    @commands.command(pass_context=True, hidden=True)
-    async def addfav(self, ctx, msg_id, hints=None):
-        """Add a fav by message id. Also react with \N{GREEN BOOK} to add a fav."""
-        # TODO Implement addfav
-        raise NotImplementedError()
-
-    @commands.command(pass_context=True)
-    async def fav(self, ctx, hint=""):
-        """Quote a random from your favorite messages."""
-        author = ctx.message.author
-        user_id = author.id
-
-        cur = self.db.execute("select fav_id from favs natural left join tags "
-                              "where user_id=:uid and (tagname=:tag or :tag='')",
-                              {"uid": user_id, "tag": hint})
-        favs = [x[0] for x in cur.fetchall()]
-
-        if not favs:
-            if hint:
-                await self.bot.say("You have no favs tagged with '%s'" % hint)
-            else:
-                await self.bot.say("You have no favs.")
+        # Ignore disabled channels
+        if msg.channel.id in self.disabled_channels:
             return
 
-        favid = random.choice(favs)
-        await self.post_fav(favid, author)
+        # Ignore disabled users
+        if msg.author.id in self.disabled_users:
+            return
 
-        not ctx.message.channel.is_private and await self.bot.delete_message(ctx.message)
+        # Ignore bots
+        if msg.author.bot:
+            return
 
-    @commands.command(pass_context=True)
-    async def myfavs(self, ctx, hint=None):
-        """Get a list of your fav tags, or quote all with a specific tag."""
-        author = ctx.message.author
-        user_id = author.id
+        new_fav = Fav.create(user_id=user.id,
+                             msg_id=msg.id,
+                             channel_id=msg.channel.id,
+                             server_id=msg.server.id,
+                             author_id=msg.author.id)
 
-        cur = self.db.cursor()
+        favembed = await self.embed_fav(new_fav)
+        await self.retag_fav_action(new_fav.fav_id, embed=favembed)
+
+    async def add_fav_by_id_action(self, msg_id, server: Server, user: User):
+        # Create a get_message Future for every textchannel on the server
+        searches = []
+        for channel in server.channels:
+            if channel.type is not ChannelType.text:
+                continue
+            fut = asyncio.ensure_future(self.bot.get_message(channel, msg_id))
+            searches.append(fut)
+
+        for res in asyncio.as_completed(searches):
+            try:
+                msg = await res
+                await self.add_fav_action(msg, user)
+            except NotFound:
+                continue
+
+    async def delete_fav_action(self, favid, msg: Message):
+        Fav.delete_by_id(favid)
+        await self.bot.delete_message(msg)
+
+    async def retag_fav_action(self, favid, embed=None):
+        thefav = Fav.get_by_id(favid)
+        user = await self.bot.get_user_info(thefav.user_id)
+
+        tagquestion = await self.bot.send_message(content="Add tags to your fav (space-separated)?",
+                                                  destination=user,
+                                                  embed=embed)
+
+        # Cancel action
+        opts = {"\N{NEGATIVE SQUARED CROSS MARK}": partial(asyncio.sleep, 0)}
+        react_fut = asyncio.ensure_future(
+            create_reaction_menu(self.bot, tagquestion, opts, show_options=True))
+
+        # Tag receiver
+        msg_fut = asyncio.ensure_future(
+            self.bot.wait_for_message(author=user,
+                                      channel=tagquestion.channel))
+
+        done, pending = await asyncio.wait([react_fut, msg_fut],
+                                           return_when=asyncio.FIRST_COMPLETED,
+                                           timeout=30)
+
+        if msg_fut in done:  # Got answer from user
+            tagmsg = await msg_fut
+            new_tags = set(tagmsg.content.split(" "))
+
+            # Many spaces result in empty splits, we don't want them
+            if "" in new_tags:
+                new_tags.remove("")
+
+            thefav.set_tags(new_tags)
+
+            await asyncio.wait([
+                self.bot.remove_reaction(tagquestion, "\N{NEGATIVE SQUARED CROSS MARK}", self.bot.user),
+                self.bot.add_reaction(tagmsg, "\N{WHITE HEAVY CHECK MARK}")])
+
+        else:  # Timeout reached or cancel pressed
+            thefav.clear_tags()
+            await self.bot.delete_message(tagquestion)
+
+    async def myfavs_action(self, author, hint):
         if not hint:
             # Print all existing tags
-            cur.execute("""select tagname, count(tagname) n
-                               from favs natural join tags
-                               where user_id=?
-                               group by tagname
-                               order by tagname""",
-                        (user_id,))
-            tags = cur.fetchall()
+            tags = Tag.select(Tag, fn.COUNT(Tag.tag_id).alias("fav_count")) \
+                .join(Fav) \
+                .where(Fav.user_id == author.id) \
+                .group_by(Tag.tagname)
 
             msg = "```\n" \
                   "[all favs] (%i)\n" \
-                  "[untagged favs] (%i)\n" % (self.favcount(user_id), self.untagged_count(user_id))
-            for tag, count in tags:
-                msg += "%s (%i)\n" % (tag, count)
+                  "[untagged favs] (%i)\n" % (Fav.count_by_user(author.id), Fav.count_untagged_by_user(author.id))
+            for tag in tags:
+                msg += "%s (%i)\n" % (tag.tagname, tag.fav_count)
             msg += "```"
 
             await self.bot.send_message(author, msg)
         else:
             # Print the favs from the given tag
-            cur.execute("select fav_id from favs natural join tags where user_id=? and tagname=?",
-                        (user_id, hint))
-            favs = [x[0] for x in cur.fetchall()]
+            favs = Fav.select().join(Tag) \
+                .where((Fav.user_id == author.id) & (Tag.tagname == hint))
 
             for favid in favs:
-                await self.post_fav(favid, author)
-        cur.close()
+                await self.post_fav_by_id_action(favid, author)
 
+    async def untagged_action(self, author):
+        user_id = author.id
+        favs = Fav.select() \
+            .join(Tag, join_type=JOIN.LEFT_OUTER) \
+            .where((Fav.user_id == user_id)) \
+            .group_by(Fav) \
+            .having(fn.COUNT(Tag.tag_id) == 0)
+        for favid in favs:
+            await self.post_fav_by_id_action(favid, author)
 
-def init_db(conn: Connection):
-    conn.execute("PRAGMA foreign_keys  = ON")
+    async def purge_action(self, msg_id):
+        entry = LogEntry.get_by_msg_id(msg_id)
+        # If that message is not known to the log, there's nothing we can do
+        if not entry:
+            return False
+        # Get all the messages that quote this fav
+        history = LogEntry.get_by_fav_id(entry.fav_id)
+        # Delete all quotes by log
+        tasks = []
+        for entry in history:
+            coro = delete_message_by_id(self.bot, entry.channel_id, entry.msg_id)
+            tasks.append(coro)
+        # Also delete the original message and Fav table entry
+        fav = Fav.get_by_id(entry.fav_id)
+        if fav:
+            coro = delete_message_by_id(self.bot, fav.channel_id, fav.msg_id)
+            tasks.append(coro)
+            fav.delete()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        # TODO maybe send the command-issuer a log of what was actually done
+        return True
 
-    conn.execute("""CREATE TABLE favs (
-                        fav_id integer primary key,
-                        user_id text not null,
-                        msg_id text not null,
-                        channel_id text not null)""")
+    async def disable_channel_action(self, channel):
+        if channel.id not in self.disabled_channels:
+            self.disabled_channels.append(channel.id)
+            return True
+        else:
+            self.disabled_channels.remove(channel.id)
+            return False
 
-    conn.execute("""create table tags (
-                        fav_id  int,
-                        tagname text collate nocase not null,
-                        foreign key (fav_id) references favs(fav_id));""")
-
-
-def update_db(conn: Connection):
-    exists = conn.execute("select * from sqlite_master where type='table' and name='lists'").fetchone()
-    if exists:
-        conn.execute("""create table tags (
-                          fav_id  int,
-                          tagname text collate nocase not null,
-                          foreign key (fav_id) references favs(fav_id))""")
-
-        conn.execute("""insert into tags(fav_id, tagname)
-                                  select fav_id, listname from lists;""")
-
-        conn.execute("""drop table lists""")
+    async def disable_user_action(self, user):
+        if user.id not in self.disabled_channels:
+            self.disabled_users.append(user.id)
+            return True
+        else:
+            self.disabled_users.remove(user.id)
+            return False
 
 
 def setup(bot):
     os.makedirs("data/favs", exist_ok=True)
 
-    needs_init = not os.path.exists("data/favs/favs.db")
-    conn = sqlite3.connect("data/favs/favs.db")
-    conn.isolation_level = None  # autocommit
+    entity.db.init("data/favs/favs.db", pragmas=entity.pragmas)
+    entity.db.connect(reuse_if_open=True)
+    entity.db.create_tables([Fav, Tag, LogEntry])
 
-    needs_init and init_db(conn)
-    update_db(conn)
-
-    n = GreenBook(bot, conn)
+    n = GreenBook(bot)
     bot.add_cog(n)
