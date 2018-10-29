@@ -1,7 +1,7 @@
 import asyncio
 from functools import partial
 
-from discord import Channel, User, NotFound, Message, Server, ChannelType, Embed, Member, Colour
+import discord
 from discord.utils import get
 from peewee import fn, JOIN
 
@@ -28,7 +28,7 @@ class FavController:
     def bot(self):
         return self.green_book.bot
 
-    async def _embed_fav(self, fav: Fav) -> Embed:
+    async def _embed_fav(self, fav: Fav) -> discord.Embed:
         channel = self.bot.get_channel(fav.channel_id)
         if not channel:
             raise ChannelNotFoundError()
@@ -36,7 +36,7 @@ class FavController:
         favowner = get(channel.server.members, id=fav.user_id)
         msg = await self.bot.get_message(channel, fav.msg_id)
 
-        embed = Embed()
+        embed = discord.Embed()
         embed.description = msg.clean_content
         embed.set_author(name=msg.author.display_name, icon_url=msg.author.avatar_url)
         # TODO Fix timezone
@@ -44,12 +44,12 @@ class FavController:
                               (msg.channel.name,
                                msg.timestamp.strftime("%d.%m.%Y %H:%M"),
                                favowner.display_name))
-        if isinstance(msg.author, Member):
+        if isinstance(msg.author, discord.Member):
             embed.colour = msg.author.colour
 
             # Prevent default black colour
-            if embed.colour == Colour.default():
-                embed.colour = Colour(0xffffff)
+            if embed.colour == discord.Colour.default():
+                embed.colour = discord.Colour(0xffffff)
 
         # Handle image embeds from source message
         for attachment in msg.attachments:
@@ -59,7 +59,7 @@ class FavController:
 
         return embed
 
-    async def post_fav_by_id_action(self, favid, channel: Channel):
+    async def post_fav_by_id_action(self, favid, channel: discord.Channel):
         try:
             fav = Fav.get_by_id(favid)
             embed = await self._embed_fav(fav)
@@ -70,7 +70,7 @@ class FavController:
             Fav.delete_by_id(favid)
             return
 
-        except NotFound:
+        except discord.NotFound:
             await self._bot.send_message(channel, "Could not find source message, deleting from db.")
             Fav.delete_by_id(favid)
             return
@@ -90,14 +90,14 @@ class FavController:
         # Wait for control reactions without blocking the caller
         asyncio.ensure_future(create_reaction_menu(self._bot, favmsg, opts, show_options=should_show_controls))
 
-    async def get_info_action(self, favid, favmsg: Message):
+    async def get_info_action(self, favid, favmsg: discord.Message):
         thefav = Fav.get_by_id(favid)  # type: Fav
         await self.bot.send_message(favmsg.channel,
                                     "https://discordapp.com/channels/{}/{}/{}".format(thefav.server_id,
                                                                                       thefav.channel_id,
                                                                                       thefav.msg_id))
 
-    async def add_fav_action(self, msg: Message, user: User):
+    async def add_fav_action(self, msg: discord.Message, user: discord.User):
         # Ignore private messages
         if msg.channel.is_private:
             return
@@ -123,11 +123,11 @@ class FavController:
         favembed = await self._embed_fav(new_fav)
         await self.retag_fav_action(new_fav.fav_id, embed=favembed)
 
-    async def add_fav_by_id_action(self, msg_id, server: Server, user: User):
+    async def add_fav_by_id_action(self, msg_id, server: discord.Server, user: discord.User):
         # Create a get_message Future for every textchannel on the server
         searches = []
         for channel in server.channels:
-            if channel.type is not ChannelType.text:
+            if channel.type is not discord.ChannelType.text:
                 continue
             fut = asyncio.ensure_future(self._bot.get_message(channel, msg_id))
             searches.append(fut)
@@ -136,10 +136,10 @@ class FavController:
             try:
                 msg = await res
                 await self.add_fav_action(msg, user)
-            except NotFound:
+            except discord.NotFound:
                 continue
 
-    async def delete_fav_action(self, favid, msg: Message):
+    async def delete_fav_action(self, favid, msg: discord.Message):
         Fav.delete_by_id(favid)
         await self._bot.delete_message(msg)
 
@@ -243,7 +243,7 @@ class FavController:
         # TODO maybe send the command-issuer a log of what was actually done
         return True
 
-    async def disable_channel_action(self, channel: Channel) -> bool:
+    async def disable_channel_action(self, channel: discord.Channel) -> bool:
         if channel.id not in self.disabled_channels:
             self.disabled_channels.append(channel.id)
             return True
@@ -251,7 +251,7 @@ class FavController:
             self.disabled_channels.remove(channel.id)
             return False
 
-    async def disable_user_action(self, user: User) -> bool:
+    async def disable_user_action(self, user: discord.User) -> bool:
         if user.id not in self.disabled_channels:
             self.disabled_users.append(user.id)
             return True
