@@ -6,8 +6,8 @@ from discord import User, Reaction, Channel, Client
 from discord.ext import commands
 
 from cogs.favutil import entity
-from cogs.favutil.entity import Fav, Tag, LogEntry
 from cogs.favutil import fav_controller
+from cogs.favutil.entity import Fav, Tag, LogEntry
 from cogs.utils import checks
 from cogs.utils.confirmation import reaction_confirm, delete_confirm
 
@@ -28,7 +28,11 @@ class GreenBook:
     @commands.command(pass_context=True)
     @delete_confirm
     async def fav(self, ctx, hint=""):
-        """Quote a random one of your favorite messages. Add one by reacting with \N{GREEN BOOK}."""
+        """Quote a random one of your favorite messages. Add one by reacting with \N{GREEN BOOK} :green_book: on any user message.
+        To delete a fav, react with \N{WASTEBASKET} :wastebasket: on the bot message.
+        To change the tags on the fav, react with \N{LABEL} :label: on the bot message.
+        To get a link to the original message, react with \N{INFORMATION SOURCE} :information_source: on the bot message.
+        """
         author = ctx.message.author
 
         server = None
@@ -109,7 +113,7 @@ class GreenBook:
     @favadm.command(pass_context=True)
     @reaction_confirm
     async def purge(self, ctx, msg_id: str):
-        """Permanently remove a fav and all associated messages"""
+        """Permanently remove a fav and all associated messages."""
         return await self.ctrl.purge_action(msg_id)
 
 
