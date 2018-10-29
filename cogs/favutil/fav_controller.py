@@ -84,11 +84,18 @@ class FavController:
         # Create reaction menu
         should_show_controls = favmsg.channel.is_private
         opts = {"\N{WASTEBASKET}": partial(self.delete_fav_action, favid, favmsg),
-                "\N{LABEL}": partial(self.retag_fav_action, favid)}
+                "\N{LABEL}": partial(self.retag_fav_action, favid),
+                "\N{INFORMATION SOURCE}": partial(self.get_info_action, favid, favmsg)}
 
-        # Wait for control reactions without blocking
-        asyncio.ensure_future(
-            create_reaction_menu(self._bot, favmsg, opts, show_options=should_show_controls))
+        # Wait for control reactions without blocking the caller
+        asyncio.ensure_future(create_reaction_menu(self._bot, favmsg, opts, show_options=should_show_controls))
+
+    async def get_info_action(self, favid, favmsg: Message):
+        thefav = Fav.get_by_id(favid)  # type: Fav
+        await self.bot.send_message(favmsg.channel,
+                                    "https://discordapp.com/channels/{}/{}/{}".format(thefav.server_id,
+                                                                                      thefav.channel_id,
+                                                                                      thefav.msg_id))
 
     async def add_fav_action(self, msg: Message, user: User):
         # Ignore private messages
