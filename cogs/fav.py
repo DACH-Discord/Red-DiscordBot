@@ -25,7 +25,7 @@ class GreenBook:
         if reaction.emoji == "\N{GREEN BOOK}":
             await self.ctrl.add_fav_action(reaction.message, user)
 
-    @commands.command(pass_context=True)
+    @commands.command(pass_context=True, aliases=["Fav"])
     @delete_confirm
     async def fav(self, ctx, hint=""):
         """Quote a random one of your favorite messages. Add one by reacting with \N{GREEN BOOK} :green_book: on any user message.
