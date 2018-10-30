@@ -71,7 +71,7 @@ class GreenBook:
     @reaction_confirm
     async def addfav(self, ctx, msg_id):
         """Add a fav by message id."""
-        await self.ctrl.add_fav_by_id_action(msg_id, ctx.message.server, ctx.message.author)
+        return await self.ctrl.add_fav_by_id_action(msg_id, ctx.message.server, ctx.message.author)
 
     @commands.command(hidden=True)
     async def pyname(self, msg: str):

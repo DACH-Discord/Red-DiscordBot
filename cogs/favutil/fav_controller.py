@@ -1,4 +1,5 @@
 import asyncio
+from asyncio import CancelledError
 from functools import partial
 
 import discord
@@ -97,22 +98,26 @@ class FavController:
                                                                                       thefav.channel_id,
                                                                                       thefav.msg_id))
 
-    async def add_fav_action(self, msg: discord.Message, user: discord.User):
+    async def add_fav_action(self, msg: discord.Message, user: discord.User) -> bool:
         # Ignore private messages
         if msg.channel.is_private:
-            return
+            return False
 
         # Ignore disabled channels
         if msg.channel.id in self.disabled_channels:
-            return
+            return False
 
         # Ignore disabled users
         if msg.author.id in self.disabled_users:
-            return
+            return False
 
         # Ignore bots
         if msg.author.bot:
-            return
+            return False
+
+        # Ignore duplicate favs
+        if Fav.select().where((Fav.user_id == user.id) & (Fav.msg_id == msg.id)):
+            return False
 
         new_fav = Fav.create(user_id=user.id,
                              msg_id=msg.id,
@@ -122,8 +127,9 @@ class FavController:
 
         favembed = await self._embed_fav(new_fav)
         await self.retag_fav_action(new_fav.fav_id, embed=favembed)
+        return True
 
-    async def add_fav_by_id_action(self, msg_id, server: discord.Server, user: discord.User):
+    async def add_fav_by_id_action(self, msg_id, server: discord.Server, user: discord.User) -> bool:
         # Create a get_message Future for every textchannel on the server
         searches = []
         for channel in server.channels:
@@ -135,8 +141,12 @@ class FavController:
         for res in asyncio.as_completed(searches):
             try:
                 msg = await res
-                await self.add_fav_action(msg, user)
-            except discord.NotFound:
+
+                for f in searches:
+                    f.cancel()
+
+                return await self.add_fav_action(msg, user)
+            except (discord.errors.NotFound, discord.errors.Forbidden, discord.errors.HTTPException):
                 continue
 
     async def delete_fav_action(self, favid, msg: discord.Message):
