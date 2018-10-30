@@ -1,5 +1,4 @@
 import asyncio
-from asyncio import CancelledError
 from functools import partial
 
 import discord

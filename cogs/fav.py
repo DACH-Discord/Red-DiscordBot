@@ -67,7 +67,7 @@ class GreenBook:
         """See all your favs that have no tags."""
         await self.ctrl.untagged_action(ctx.message.author)
 
-    @commands.command(pass_context=True)
+    @commands.command(pass_context=True, no_pm=True)
     @reaction_confirm
     async def addfav(self, ctx, msg_id):
         """Add a fav by message id."""
