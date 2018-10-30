@@ -171,9 +171,13 @@ class FavController:
             self._bot.wait_for_message(author=user,
                                        channel=tagquestion.channel))
 
+        def abort_check(msg):
+            return msg.content is not "Add tags to your fav (space-separated)?"
+
         abort_fut = asyncio.ensure_future(
             self._bot.wait_for_message(author=self._bot.user,
-                                       channel=tagquestion.channel))
+                                       channel=tagquestion.channel,
+                                       check=abort_check))
 
         done, pending = await asyncio.wait([react_fut, msg_fut, abort_fut],
                                            return_when=asyncio.FIRST_COMPLETED,
