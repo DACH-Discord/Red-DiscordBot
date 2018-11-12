@@ -1,11 +1,11 @@
 import asyncio
-from typing import Mapping, Callable, List
+from typing import Mapping, Callable, List, Set
 
 from discord import Client, Message
 
 
 async def create_reaction_menu(bot: Client, msg: Message, options: Mapping[str, Callable], show_options=False,
-                               restrict_users=tuple()):
+                               restrict_users: Set = {}):
     accepted_reactions = list(options.keys())
 
     show_options and await mass_react(bot, msg, accepted_reactions)
